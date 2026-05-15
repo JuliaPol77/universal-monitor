@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 
-// -------------------- CONFIG --------------------
+// ==================== CONFIG ====================
 
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
@@ -11,7 +11,7 @@ const SHEET_SITES =
 const WEBAPP_URL =
   "https://script.google.com/macros/s/AKfycbzmA9s0ZfO8pUjWmVKnC9qgtfhqBWtTPSpabdp5vQpsNtBHQ8LEmUzWbVJ99hWcwy-nng/exec";
 
-// -------------------- READ CSV --------------------
+// ==================== CSV ====================
 
 async function readCsv(url) {
   const res = await fetch(url);
@@ -21,121 +21,104 @@ async function readCsv(url) {
     .trim()
     .split("\n")
     .slice(1)
-    .map((l) => l.split(",")[0]?.replace(/"/g, "").trim())
+    .map((line) => line.split(",")[0]?.replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
-const readKeywords = () => readCsv(SHEET_KEYWORDS);
-const readSites = () => readCsv(SHEET_SITES);
+async function readKeywords() {
+  return readCsv(SHEET_KEYWORDS);
+}
 
-// -------------------- BUILD QUERIES --------------------
+async function readSites() {
+  return readCsv(SHEET_SITES);
+}
 
-function buildSearchQueries(keywords, sites, limit = 20) {
-  const out = [];
+// ==================== SEARCH ====================
 
-  for (const k of keywords) {
-    for (const s of sites) {
-      out.push(`${k} ${s}`);
+function buildQueries(keywords, sites) {
+  const arr = [];
 
-      if (out.length >= limit) {
-        return out;
-      }
+  for (const keyword of keywords) {
+    for (const site of sites) {
+      arr.push(`${keyword} ${site}`);
     }
   }
 
-  return out;
+  return arr;
 }
 
-// -------------------- SEARCH LINKS --------------------
+async function searchDuck(query) {
+  try {
+    const url =
+      "https://html.duckduckgo.com/html/?q=" +
+      encodeURIComponent(query);
 
-async function searchLinks(query) {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url);
 
-  const res = await fetch(url);
-  const html = await res.text();
+    const html = await res.text();
 
-  return [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
-    .map((m) => m[1])
-    .slice(0, 5);
+    const matches = [
+      ...html.matchAll(
+        /<a rel="nofollow" class="result__a" href="(.*?)"/g
+      ),
+    ];
+
+    return matches
+      .map((m) => m[1])
+      .map(cleanDuckUrl)
+      .filter((u) => u.includes("youtube.com/watch"))
+      .slice(0, 3);
+  } catch (e) {
+    console.log("SEARCH ERROR", e.message);
+    return [];
+  }
 }
 
 function cleanDuckUrl(url) {
   try {
     const match = url.match(/uddg=([^&]+)/);
-    return match ? decodeURIComponent(match[1]) : url;
+
+    if (!match) return url;
+
+    return decodeURIComponent(match[1]);
   } catch {
     return url;
   }
 }
 
-// -------------------- GET COMMENTS --------------------
+// ==================== COMMENTS ====================
 
-async function getComments(videoId) {
+async function getComments(videoUrl) {
   try {
-    const watchHtml = await fetch(
-      `https://www.youtube.com/watch?v=${videoId}`
-    ).then((r) => r.text());
+    const html = await fetch(videoUrl).then((r) => r.text());
 
-    const apiKeyMatch = watchHtml.match(/"INNERTUBE_API_KEY":"(.*?)"/);
+    const comments = [];
 
-    if (!apiKeyMatch) {
-      console.log("NO API KEY");
-      return [];
+    const regex =
+      /"contentText":\{"runs":\[\{"text":"(.*?)"\}\]/g;
+
+    const matches = [...html.matchAll(regex)];
+
+    for (const m of matches) {
+      const text = m[1];
+
+      if (!text) continue;
+
+      if (text.length < 3) continue;
+
+      comments.push(text);
     }
 
-    const apiKey = apiKeyMatch[1];
-
-    const tokenMatch = watchHtml.match(
-      /"continuationCommand":{"token":"(.*?)"/
-    );
-
-    if (!tokenMatch) {
-      console.log("NO COMMENT TOKEN");
-      return [];
-    }
-
-    const continuation = tokenMatch[1];
-
-    const res = await fetch(
-      `https://www.youtube.com/youtubei/v1/next?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          context: {
-            client: {
-              clientName: "WEB",
-              clientVersion: "2.20240509.00.00",
-            },
-          },
-          continuation,
-        }),
-      }
-    );
-
-    const json = await res.json();
-
-    const text = JSON.stringify(json);
-
-    const comments = [
-      ...text.matchAll(/"contentText":\{"runs":\[\{"text":"(.*?)"\}\]/g),
-    ]
-      .map((m) => m[1])
-      .filter(Boolean)
-      .slice(0, 20);
-
-    return comments;
+    return comments.slice(0, 20);
   } catch (e) {
-    console.log("COMMENTS ERROR", e.message);
+    console.log("COMMENT ERROR", e.message);
     return [];
   }
 }
 
-// -------------------- WRITE TO SHEET --------------------
+// ==================== WRITE ====================
 
-async function writeRow(row) {
+async function writeResult(row) {
   try {
     await fetch(WEBAPP_URL, {
       method: "POST",
@@ -145,84 +128,55 @@ async function writeRow(row) {
       body: JSON.stringify(row),
     });
 
-    console.log("WRITTEN:", row.comment.slice(0, 40));
+    console.log("WRITTEN");
   } catch (e) {
     console.log("WRITE ERROR", e.message);
   }
 }
 
-// -------------------- ASYNC POOL --------------------
-
-async function asyncPool(limit, items, fn) {
-  const ret = [];
-  const executing = [];
-
-  for (const item of items) {
-    const p = Promise.resolve().then(() => fn(item));
-
-    ret.push(p);
-
-    if (limit <= items.length) {
-      const e = p.then(() =>
-        executing.splice(executing.indexOf(e), 1)
-      );
-
-      executing.push(e);
-
-      if (executing.length >= limit) {
-        await Promise.race(executing);
-      }
-    }
-  }
-
-  return Promise.all(ret);
-}
-
-// -------------------- MAIN --------------------
+// ==================== MAIN ====================
 
 (async () => {
+  console.log("START");
+
   const keywords = await readKeywords();
   const sites = await readSites();
 
   console.log("KEYWORDS:", keywords.length);
   console.log("SITES:", sites.length);
 
-  const queries = buildSearchQueries(keywords, sites, 20);
+  const queries = buildQueries(keywords, sites);
 
   console.log("QUERIES:", queries.length);
 
-  await asyncPool(3, queries, async (query) => {
+  for (const query of queries) {
     console.log("SEARCH:", query);
 
-    const links = await searchLinks(query);
+    const links = await searchDuck(query);
 
-    await asyncPool(2, links, async (link) => {
-      const cleanUrl = cleanDuckUrl(link);
+    console.log("FOUND LINKS:", links.length);
 
-      if (!cleanUrl.includes("youtube.com/watch")) return;
+    for (const url of links) {
+      console.log("VIDEO:", url);
 
-      console.log("VIDEO:", cleanUrl);
-
-      const videoId = cleanUrl.split("v=")[1]?.split("&")[0];
-
-      if (!videoId) return;
-
-      const comments = await getComments(videoId);
+      const comments = await getComments(url);
 
       console.log("COMMENTS:", comments.length);
 
       for (const comment of comments) {
-        await writeRow({
+        const row = {
           keyword: query,
           site: "youtube",
-          postUrl: cleanUrl,
-          commentUrl: cleanUrl,
-          comment,
+          postUrl: url,
+          commentUrl: url,
+          comment: comment,
           date: new Date().toISOString(),
-        });
+        };
+
+        await writeResult(row);
       }
-    });
-  });
+    }
+  }
 
   console.log("DONE");
 })();

@@ -1,0 +1,11 @@
+{
+  "name": "universal-monitor",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

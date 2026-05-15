@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 // -------------------- SHEETS --------------------
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";

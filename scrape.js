@@ -1,18 +1,19 @@
-import { chromium } from "@playwright/test";
+import { chromium } from "playwright";
 
-// -------------------- CONFIG --------------------
+// -------------------- SHEETS --------------------
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
 
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
-const MAX_QUERIES = 10;        // ограничение нагрузки
-const MAX_LINKS = 1;           // только 1 ссылка на запрос
-const MAX_COMMENTS = 10;       // меньше → быстрее
-const PAGE_TIMEOUT = 12000;    // защита от зависаний
+// -------------------- LIMITS (важно для стабильности) --------------------
+const MAX_QUERIES = 5;
+const MAX_LINKS = 1;
+const MAX_COMMENTS = 10;
+const TIMEOUT = 12000;
 
-// -------------------- KEYWORDS --------------------
+// -------------------- READ KEYWORDS --------------------
 async function readKeywords() {
   const res = await fetch(SHEET_KEYWORDS);
   const csv = await res.text();
@@ -25,7 +26,7 @@ async function readKeywords() {
     .filter(Boolean);
 }
 
-// -------------------- SITES --------------------
+// -------------------- READ SITES --------------------
 async function readSites() {
   const res = await fetch(SHEET_SITES);
   const csv = await res.text();
@@ -38,20 +39,20 @@ async function readSites() {
     .filter(Boolean);
 }
 
-// -------------------- SEARCH QUERIES --------------------
+// -------------------- BUILD QUERIES --------------------
 function buildSearchQueries(keywords, sites) {
-  const queries = [];
+  const out = [];
 
   for (const k of keywords) {
     for (const s of sites) {
-      queries.push(`${k} site:${s}`);
+      out.push(`${k} site:${s}`);
     }
   }
 
-  return queries;
+  return out;
 }
 
-// -------------------- SEARCH --------------------
+// -------------------- SEARCH (DuckDuckGo HTML) --------------------
 async function searchLinks(query) {
   try {
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -64,8 +65,7 @@ async function searchLinks(query) {
       .filter(Boolean);
 
     return links;
-  } catch (e) {
-    console.log("SEARCH ERROR:", e.message);
+  } catch {
     return [];
   }
 }
@@ -80,14 +80,14 @@ function cleanDuckUrl(url) {
   }
 }
 
-// -------------------- YOUTUBE PARSER (SAFE) --------------------
+// -------------------- YOUTUBE PARSER --------------------
 async function parseYouTube(page, url, query) {
   console.log("YOUTUBE:", url);
 
   try {
     await page.goto(url, {
       waitUntil: "domcontentloaded",
-      timeout: PAGE_TIMEOUT
+      timeout: TIMEOUT
     });
 
     await page.waitForTimeout(2000);
@@ -138,7 +138,7 @@ async function parseYouTube(page, url, query) {
   });
 
   const page = await browser.newPage();
-  page.setDefaultTimeout(PAGE_TIMEOUT);
+  page.setDefaultTimeout(TIMEOUT);
 
   const results = [];
 
@@ -147,9 +147,7 @@ async function parseYouTube(page, url, query) {
 
     const links = await searchLinks(q);
 
-    const limitedLinks = links.slice(0, MAX_LINKS);
-
-    for (const link of limitedLinks) {
+    for (const link of links.slice(0, MAX_LINKS)) {
       const cleanUrl = cleanDuckUrl(link);
 
       if (cleanUrl.includes("youtube.com/watch")) {

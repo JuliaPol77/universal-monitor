@@ -47,15 +47,48 @@ function buildSearchQueries(keywords, sites) {
 }
 
 
+// -------------------- LINK --------------------
+async function searchLinks(query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
+  const res = await fetch(url);
+  const html = await res.text();
+
+  const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
+    .map(m => m[1])
+    .filter(Boolean);
+
+  return links;
+}
+
+
 // -------------------- MAIN --------------------
 (async () => {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  const queries = buildSearchQueries(keywords, sites).slice(0, 200);
+  const queries = buildSearchQueries(keywords, sites).slice(0, 50);
 
-  console.log("KEYWORDS:", keywords.length);
-  console.log("SITES:", sites.length);
-  console.log("QUERIES TOTAL:", queries.length);
-  console.log("SAMPLE:", queries.slice(0, 10));
+  console.log("TOTAL QUERIES:", queries.length);
+
+  const allResults = [];
+
+  for (const q of queries) {
+    console.log("SEARCH:", q);
+
+    try {
+      const links = await searchLinks(q);
+
+      for (const link of links.slice(0, 3)) {
+        allResults.push({
+          query: q,
+          url: link
+        });
+      }
+    } catch (e) {
+      console.log("ERROR:", q);
+    }
+  }
+
+  console.log("RESULTS:", allResults.slice(0, 10));
 })();

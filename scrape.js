@@ -76,7 +76,6 @@ async function searchDuck(query) {
       encodeURIComponent(query);
 
     const res = await fetch(url);
-
     const html = await res.text();
 
     const matches = [
@@ -85,26 +84,43 @@ async function searchDuck(query) {
       ),
     ];
 
-    return matches
-      .map((m) => m[1])
-      .map(cleanDuckUrl)
-      .filter(u => ALLOWED_SITES.some(s => u.includes(s)))
-      .slice(0, 5);
+    const urls = matches
+      .map(m => cleanDuckUrl(m[1]))
+      .filter(Boolean)
+      .filter(isAllowed)
+      .slice(0, 10);
+
+    return urls;
+
   } catch (e) {
     console.log("SEARCH ERROR:", e.message);
     return [];
   }
 }
 
+// ==================== CLEAN DUCK URL ====================
+
 function cleanDuckUrl(url) {
   try {
     const match = url.match(/uddg=([^&]+)/);
-
     if (!match) return url;
-
     return decodeURIComponent(match[1]);
   } catch {
     return url;
+  }
+}
+
+// ==================== NORMALIZE + FILTER ====================
+
+function isAllowed(url) {
+  try {
+    const hostname = new URL(url).hostname.replace("www.", "");
+
+    return ALLOWED_SITES.some(site =>
+      hostname === site || hostname.endsWith("." + site)
+    );
+  } catch {
+    return false;
   }
 }
 

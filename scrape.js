@@ -88,19 +88,25 @@ function cleanDuckUrl(url) {
 // ==================== WRITE ====================
 
 async function writeResult(row) {
-  const params = new URLSearchParams();
+  try {
+    console.log("SENDING:", row);
 
-  for (const key in row) {
-    params.append(key, row[key]);
+    const res = await fetch(WEBAPP_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(row),
+    });
+
+    console.log("STATUS:", res.status);
+
+    const text = await res.text();
+    console.log("RESPONSE:", text);
+
+  } catch (e) {
+    console.log("WRITE ERROR:", e.message);
   }
-
-  const res = await fetch(WEBAPP_URL, {
-    method: "POST",
-    body: params
-  });
-
-  const text = await res.text();
-  console.log("WRITE RESPONSE:", text);
 }
 
 // ==================== MAIN ====================

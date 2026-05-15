@@ -2,16 +2,11 @@
   "name": "universal-monitor",
   "version": "1.0.0",
   "type": "module",
+  "main": "scrape.js",
   "scripts": {
-    "scrape": "node scrape.js"
+    "start": "node scrape.js"
   },
   "dependencies": {
     "playwright": "^1.48.0"
-  }
-}
-{
-  "scripts": {
-    "install-browsers": "npx playwright install --with-deps",
-    "start": "node scrape.js"
   }
 }

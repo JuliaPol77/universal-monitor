@@ -60,7 +60,12 @@ function buildQueries(keywords, sites) {
 
   for (const keyword of keywords) {
     for (const site of sites) {
-      queries.push(`${keyword} ${site}`);
+
+      const cleanSite = site
+        .replace("site:", "")
+        .trim();
+
+      queries.push(`${keyword} ${cleanSite}`);
     }
   }
 

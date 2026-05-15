@@ -129,19 +129,45 @@ function isAllowed(url) {
   }
 }
 
-// ==================== WRITE TO GOOGLE SHEET ====================
 
-async function writeResult(query, url) {
+// ==================== PARSE PAGE TEXT ====================
+
+async function parsePageText(url) {
   try {
 
-    const row = {
-      keyword: query,
-      site: getSiteName(url),
-      postUrl: url,
-      commentUrl: "",
-      comment: "",
-      date: new Date().toISOString(),
-    };
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      },
+    });
+
+    const html = await res.text();
+
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 5000);
+
+    return text;
+
+  } catch (e) {
+
+    console.log("PARSE ERROR:", e.message);
+
+    return "";
+
+  }
+}
+
+
+// ==================== WRITE TO GOOGLE SHEET ====================
+
+async function writeResult(row) {
+  try {
 
     console.log("SENDING:");
     console.log(row);
@@ -203,7 +229,16 @@ function getSiteName(url) {
     for (const url of links) {
       console.log("VIDEO:", url);
 
-await writeResult(query, url);
+const text = await parsePageText(url);
+
+await writeResult({
+  keyword: query,
+  site: getSiteName(url),
+  postUrl: url,
+  commentUrl: "",
+  comment: text,
+  date: new Date().toISOString(),
+});
     }
   }
 

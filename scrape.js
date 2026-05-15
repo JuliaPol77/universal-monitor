@@ -140,6 +140,3 @@ async function parseYouTube(page, url, query) {
 
   console.log("FINAL RESULTS SAMPLE:", results.slice(0, 2));
 })();
-
-  console.log("RESULTS:", allResults.slice(0, 10));
-})();

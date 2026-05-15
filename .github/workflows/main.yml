@@ -1,4 +1,4 @@
-name: scraper
+name: run
 
 on:
   workflow_dispatch:
@@ -9,10 +9,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - run: npm install
+
       - run: npx playwright install --with-deps
+
       - run: node scrape.js

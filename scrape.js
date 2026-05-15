@@ -1,11 +1,16 @@
-throw new Error("STOP WORKFLOW");
 import { chromium } from "@playwright/test";
+
+// -------------------- CONFIG --------------------
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
 
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
+const MAX_QUERIES = 10;        // ограничение нагрузки
+const MAX_LINKS = 1;           // только 1 ссылка на запрос
+const MAX_COMMENTS = 10;       // меньше → быстрее
+const PAGE_TIMEOUT = 12000;    // защита от зависаний
 
 // -------------------- KEYWORDS --------------------
 async function readKeywords() {
@@ -20,7 +25,6 @@ async function readKeywords() {
     .filter(Boolean);
 }
 
-
 // -------------------- SITES --------------------
 async function readSites() {
   const res = await fetch(SHEET_SITES);
@@ -34,77 +38,87 @@ async function readSites() {
     .filter(Boolean);
 }
 
-
-// -------------------- ROUTER --------------------
+// -------------------- SEARCH QUERIES --------------------
 function buildSearchQueries(keywords, sites) {
   const queries = [];
 
   for (const k of keywords) {
     for (const s of sites) {
-      queries.push(`${k} ${s}`);
+      queries.push(`${k} site:${s}`);
     }
   }
 
   return queries;
 }
 
-
-// -------------------- LINK --------------------
+// -------------------- SEARCH --------------------
 async function searchLinks(query) {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
-  const res = await fetch(url);
-  const html = await res.text();
+    const res = await fetch(url, { timeout: 10000 });
+    const html = await res.text();
 
-  const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
-    .map(m => m[1])
-    .filter(Boolean);
+    const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
+      .map(m => m[1])
+      .filter(Boolean);
 
-  return links;
+    return links;
+  } catch (e) {
+    console.log("SEARCH ERROR:", e.message);
+    return [];
+  }
 }
+
+// -------------------- CLEAN URL --------------------
 function cleanDuckUrl(url) {
   try {
     const match = url.match(/uddg=([^&]+)/);
-    if (!match) return url;
-
-    return decodeURIComponent(match[1]);
+    return match ? decodeURIComponent(match[1]) : url;
   } catch {
     return url;
   }
 }
 
-
-// -------------------- YOUTUBE --------------------
+// -------------------- YOUTUBE PARSER (SAFE) --------------------
 async function parseYouTube(page, url, query) {
-  console.log("YOUTUBE PARSE:", url);
+  console.log("YOUTUBE:", url);
 
-  await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(4000);
+  try {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: PAGE_TIMEOUT
+    });
 
-  // описание видео
-  const title = await page.title();
+    await page.waitForTimeout(2000);
 
-  const description = await page.evaluate(() => {
-    const el = document.querySelector("#description");
-    return el ? el.innerText : "";
-  });
+    const title = await page.title().catch(() => "");
 
-  // комментарии (первые загруженные)
-  const comments = await page.evaluate(() => {
-    const nodes = document.querySelectorAll("#content-text");
-    return Array.from(nodes)
-      .slice(0, 20)
-      .map(el => el.innerText.trim())
-      .filter(Boolean);
-  });
+    const description = await page.evaluate(() => {
+      const el = document.querySelector("#description");
+      return el ? el.innerText : "";
+    }).catch(() => "");
 
-  return {
-    url,
-    query,
-    title,
-    description,
-    comments
-  };
+    const comments = await page.evaluate((max) => {
+      const nodes = document.querySelectorAll("#content-text");
+      return Array.from(nodes)
+        .slice(0, max)
+        .map(el => el.innerText.trim())
+        .filter(Boolean);
+    }, MAX_COMMENTS).catch(() => []);
+
+    return {
+      url,
+      query,
+      title,
+      description,
+      comments
+    };
+
+  } catch (e) {
+    console.log("YOUTUBE ERROR:", e.message);
+    return null;
+  }
 }
 
 // -------------------- MAIN --------------------
@@ -112,10 +126,19 @@ async function parseYouTube(page, url, query) {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  const queries = buildSearchQueries(keywords, sites).slice(0, 20);
+  const queries = buildSearchQueries(keywords, sites).slice(0, MAX_QUERIES);
 
-  const browser = await chromium.launch({ headless: true });
+  console.log("KEYWORDS:", keywords.length);
+  console.log("SITES:", sites.length);
+  console.log("QUERIES:", queries.length);
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox"]
+  });
+
   const page = await browser.newPage();
+  page.setDefaultTimeout(PAGE_TIMEOUT);
 
   const results = [];
 
@@ -124,21 +147,23 @@ async function parseYouTube(page, url, query) {
 
     const links = await searchLinks(q);
 
-    for (const link of links.slice(0, 2)) {
+    const limitedLinks = links.slice(0, MAX_LINKS);
+
+    for (const link of limitedLinks) {
       const cleanUrl = cleanDuckUrl(link);
 
-      // пока делаем только YouTube
       if (cleanUrl.includes("youtube.com/watch")) {
         const data = await parseYouTube(page, cleanUrl, q);
 
-        results.push(data);
-
-        console.log("COMMENTS:", data.comments.length);
+        if (data) {
+          results.push(data);
+          console.log("COMMENTS:", data.comments.length);
+        }
       }
     }
   }
 
   await browser.close();
 
-  console.log("FINAL RESULTS SAMPLE:", results.slice(0, 2));
+  console.log("FINAL SAMPLE:", results.slice(0, 3));
 })();

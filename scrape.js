@@ -9,6 +9,11 @@ const SHEET_SITES =
 const WEBAPP_URL =
   "https://script.google.com/macros/s/AKfycbzgv33XufOlfIQ4uRcW2cZfryqwjnfODx-k14erXh32Kqo7UFofTY4tz1pC9qBkuVc1hQ/exec";
 
+const ALLOWED_SITES = [
+  "rutube.ru",
+  "youtube.com"
+];
+
 // ==================== READ CSV ====================
 
 async function readCsv(url) {
@@ -66,7 +71,7 @@ async function searchDuck(query) {
     return matches
       .map((m) => m[1])
       .map(cleanDuckUrl)
-      .filter((u) => u.includes("youtube.com/watch"))
+      .filter(u => ALLOWED_SITES.some(s => u.includes(s)))
       .slice(0, 5);
   } catch (e) {
     console.log("SEARCH ERROR:", e.message);

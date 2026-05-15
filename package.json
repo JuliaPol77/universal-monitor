@@ -9,3 +9,9 @@
     "playwright": "^1.48.0"
   }
 }
+{
+  "scripts": {
+    "install-browsers": "npx playwright install --with-deps",
+    "start": "node scrape.js"
+  }
+}

@@ -14,3 +14,6 @@ async function readKeywords() {
 
   return keywords;
 }
+const keywords = await readKeywords();
+
+console.log("KEYWORDS:", keywords);

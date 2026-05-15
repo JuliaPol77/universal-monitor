@@ -60,6 +60,16 @@ async function searchLinks(query) {
 
   return links;
 }
+function cleanDuckUrl(url) {
+  try {
+    const match = url.match(/uddg=([^&]+)/);
+    if (!match) return url;
+
+    return decodeURIComponent(match[1]);
+  } catch {
+    return url;
+  }
+}
 
 
 // -------------------- MAIN --------------------
@@ -82,7 +92,7 @@ async function searchLinks(query) {
       for (const link of links.slice(0, 3)) {
         allResults.push({
           query: q,
-          url: link
+          url: cleanDuckUrl(link)
         });
       }
     } catch (e) {

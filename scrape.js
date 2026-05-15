@@ -9,29 +9,7 @@ const SHEET_SITES =
 const WEBAPP_URL =
   "https://script.google.com/macros/s/AKfycbzgv33XufOlfIQ4uRcW2cZfryqwjnfODx-k14erXh32Kqo7UFofTY4tz1pC9qBkuVc1hQ/exec";
 
-const ALLOWED_SITES = [
-  "rutube.ru",
-  "dzen.ru",
-  "vk.com",
-  "ok.ru",
-  "threads.net",
-  "woman.ru",
-  "babyblog.ru",
-  "eva.ru",
-  "otvet.mail.ru",
-  "7ya.ru",
-  "cosmo.ru",
-  "lisa.ru",
-  "womanhit.ru",
-  "passion.ru",
-  "mycharm.ru",
-  "livejournal.com",
-  "pikabu.ru",
-  "vc.ru",
-  "youtube.com"
-];
-
-// ==================== CSV ====================
+// ==================== READ CSV ====================
 
 async function readCsv(url) {
   const res = await fetch(url);
@@ -41,56 +19,77 @@ async function readCsv(url) {
     .trim()
     .split("\n")
     .slice(1)
-    .map(l => l.split(",")[0]?.replace(/"/g, "").trim())
+    .map((line) => line.split(",")[0]?.replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
-const readKeywords = () => readCsv(SHEET_KEYWORDS);
-const readSites = () => readCsv(SHEET_SITES);
+async function readKeywords() {
+  return readCsv(SHEET_KEYWORDS);
+}
 
-// ==================== QUERIES ====================
+async function readSites() {
+  return readCsv(SHEET_SITES);
+}
+
+// ==================== BUILD QUERIES ====================
 
 function buildQueries(keywords, sites) {
-  const out = [];
-  for (const k of keywords) {
-    for (const s of sites) {
-      out.push(`${k} site:${s}`);
+  const queries = [];
+
+  for (const keyword of keywords) {
+    for (const site of sites) {
+      queries.push(`${keyword} ${site}`);
     }
   }
-  return out;
+
+  return queries;
 }
 
 // ==================== SEARCH ====================
 
 async function searchDuck(query) {
-  const url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query);
+  try {
+    const url =
+      "https://html.duckduckgo.com/html/?q=" +
+      encodeURIComponent(query);
 
-  const res = await fetch(url);
-  const html = await res.text();
+    const res = await fetch(url);
 
-  return [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
-    .map(m => m[1])
-    .map(cleanDuckUrl)
-    .filter(Boolean)
-    .filter(u => ALLOWED_SITES.some(s => u.includes(s)))
-    .slice(0, 5);
+    const html = await res.text();
+
+    const matches = [
+      ...html.matchAll(
+        /<a rel="nofollow" class="result__a" href="(.*?)"/g
+      ),
+    ];
+
+    return matches
+      .map((m) => m[1])
+      .map(cleanDuckUrl)
+      .filter((u) => u.includes("youtube.com/watch"))
+      .slice(0, 5);
+  } catch (e) {
+    console.log("SEARCH ERROR:", e.message);
+    return [];
+  }
 }
 
 function cleanDuckUrl(url) {
   try {
-    const m = url.match(/uddg=([^&]+)/);
-    return m ? decodeURIComponent(m[1]) : url;
+    const match = url.match(/uddg=([^&]+)/);
+
+    if (!match) return url;
+
+    return decodeURIComponent(match[1]);
   } catch {
     return url;
   }
 }
 
-// ==================== WRITE ====================
+// ==================== WRITE TO GOOGLE SHEET ====================
 
 async function writeResult(row) {
   try {
-    console.log("SENDING:", row);
-
     const res = await fetch(WEBAPP_URL, {
       method: "POST",
       headers: {
@@ -99,11 +98,9 @@ async function writeResult(row) {
       body: JSON.stringify(row),
     });
 
-    console.log("STATUS:", res.status);
-
     const text = await res.text();
-    console.log("RESPONSE:", text);
 
+    console.log("WRITE RESPONSE:", text);
   } catch (e) {
     console.log("WRITE ERROR:", e.message);
   }
@@ -112,23 +109,38 @@ async function writeResult(row) {
 // ==================== MAIN ====================
 
 (async () => {
+  console.log("START");
+
   const keywords = await readKeywords();
   const sites = await readSites();
 
+  console.log("KEYWORDS:", keywords);
+  console.log("SITES:", sites);
+
   const queries = buildQueries(keywords, sites);
 
-  for (const q of queries) {
-    const links = await searchDuck(q);
+  console.log("QUERIES:", queries.length);
+
+  for (const query of queries) {
+    console.log("SEARCH:", query);
+
+    const links = await searchDuck(query);
+
+    console.log("FOUND:", links.length);
 
     for (const url of links) {
+      console.log("VIDEO:", url);
+
       await writeResult({
-        keyword: q,
-        site: "search",
+        keyword: query,
+        site: "youtube",
         postUrl: url,
         commentUrl: "",
         comment: "",
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
       });
     }
   }
+
+  console.log("DONE");
 })();

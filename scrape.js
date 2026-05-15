@@ -126,8 +126,21 @@ function isAllowed(url) {
 
 // ==================== WRITE TO GOOGLE SHEET ====================
 
-async function writeResult(row) {
+async function writeResult(query, url) {
   try {
+
+    const row = {
+      keyword: query,
+      site: getSiteName(url),
+      postUrl: url,
+      commentUrl: "",
+      comment: "",
+      date: new Date().toISOString(),
+    };
+
+    console.log("SENDING:");
+    console.log(row);
+
     const res = await fetch(WEBAPP_URL, {
       method: "POST",
       headers: {
@@ -136,11 +149,27 @@ async function writeResult(row) {
       body: JSON.stringify(row),
     });
 
+    console.log("STATUS:", res.status);
+
     const text = await res.text();
 
-    console.log("WRITE RESPONSE:", text);
+    console.log("RESPONSE:", text);
+
   } catch (e) {
-    console.log("WRITE ERROR:", e.message);
+
+    console.log("WRITE ERROR:");
+    console.log(e);
+
+  }
+}
+
+// ==================== GET SITE NAME ====================
+
+function getSiteName(url) {
+  try {
+    return new URL(url).hostname.replace("www.", "");
+  } catch {
+    return "unknown";
   }
 }
 
@@ -169,14 +198,7 @@ async function writeResult(row) {
     for (const url of links) {
       console.log("VIDEO:", url);
 
-      await writeResult({
-        keyword: query,
-        site: "youtube",
-        postUrl: url,
-        commentUrl: "",
-        comment: "",
-        date: new Date().toISOString(),
-      });
+await writeResult(query, url);
     }
   }
 

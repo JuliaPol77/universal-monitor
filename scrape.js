@@ -1,40 +1,13 @@
-import { chromium } from "playwright";
+import fetch from "node-fetch";
 
-// -------------------- CONFIG --------------------
+// -------------------- SHEETS --------------------
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
 
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
-const MAX_QUERIES = 10;
-const WORKERS = 3;
-const TIMEOUT = 20000;
-const MAX_LINKS = 2;
-
-// -------------------- CACHE --------------------
-const cache = new Map();
-
-// -------------------- UTIL --------------------
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function safe(fn, retries = 2) {
-  let lastErr;
-
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastErr = e;
-      await sleep(500 * (i + 1)); // backoff
-    }
-  }
-
-  console.log("FAILED after retries:", lastErr.message);
-  return null;
-}
-
-// -------------------- SHEETS --------------------
+// -------------------- READERS --------------------
 async function readCsv(url) {
   const res = await fetch(url);
   const csv = await res.text();
@@ -47,21 +20,31 @@ async function readCsv(url) {
     .filter(Boolean);
 }
 
-// -------------------- SEARCH --------------------
-async function searchLinks(query) {
-  if (cache.has(query)) return cache.get(query);
+const readKeywords = () => readCsv(SHEET_KEYWORDS);
+const readSites = () => readCsv(SHEET_SITES);
 
+// -------------------- QUERIES --------------------
+function buildSearchQueries(keywords, sites, limit = 5) {
+  const out = [];
+  for (const k of keywords) {
+    for (const s of sites) {
+      out.push(`${k} ${s}`);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+// -------------------- DUCKDUCKGO --------------------
+async function searchLinks(query) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
   const res = await fetch(url);
   const html = await res.text();
 
-  const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
+  return [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
     .map(m => m[1])
-    .filter(Boolean);
-
-  cache.set(query, links);
-
-  return links;
+    .slice(0, 3);
 }
 
 function cleanDuckUrl(url) {
@@ -73,109 +56,83 @@ function cleanDuckUrl(url) {
   }
 }
 
-// -------------------- YOUTUBE --------------------
-async function parseYouTube(browser, url, query) {
-  const page = await browser.newPage();
-
+// -------------------- FAST YOUTUBE (NO PLAYWRIGHT) --------------------
+async function parseYouTube(url, query) {
   try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: TIMEOUT,
-    });
+    const videoId = url.split("v=")[1]?.split("&")[0];
 
-    const title = await page.title();
+    if (!videoId) return null;
 
-    const description = await page.evaluate(() => {
-      const el = document.querySelector("#description");
-      return el ? el.innerText : "";
-    });
+    // лёгкий metadata fetch (очень быстрый)
+    const oembed = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+    ).then(r => r.json()).catch(() => null);
 
-    const comments = await page.evaluate(() => {
-      const nodes = document.querySelectorAll("#content-text");
-      return Array.from(nodes)
-        .slice(0, 10)
-        .map(e => e.innerText.trim())
-        .filter(Boolean);
-    });
+    return {
+      url,
+      query,
+      title: oembed?.title || "",
+      author: oembed?.author_name || "",
+      comments: [] // ⚠️ fast mode: без тяжёлого DOM
+    };
 
-    await page.close();
-
-    return { url, query, title, description, comments };
-
-  } catch (e) {
-    await page.close();
+  } catch {
     return null;
   }
 }
 
-// -------------------- QUEUE --------------------
-class Queue {
-  constructor(items) {
-    this.items = items;
-    this.index = 0;
-  }
+// -------------------- PARALLEL LIMIT --------------------
+async function asyncPool(limit, items, fn) {
+  const ret = [];
+  const executing = [];
 
-  next() {
-    if (this.index >= this.items.length) return null;
-    return this.items[this.index++];
-  }
-}
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item));
+    ret.push(p);
 
-// -------------------- WORKER --------------------
-async function worker(id, queue, browser, results) {
-  while (true) {
-    const q = queue.next();
-    if (!q) return;
-
-    console.log(`Worker ${id} →`, q);
-
-    const links = await safe(() => searchLinks(q));
-    if (!links) continue;
-
-    const youtubeLinks = links
-      .map(cleanDuckUrl)
-      .filter(u => u.includes("youtube.com/watch"))
-      .slice(0, MAX_LINKS);
-
-    for (const link of youtubeLinks) {
-      const data = await safe(() => parseYouTube(browser, link, q));
-
-      if (data) {
-        results.push(data);
-        console.log(`Worker ${id} OK →`, data.title?.slice(0, 50));
+    if (limit <= items.length) {
+      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+      executing.push(e);
+      if (executing.length >= limit) {
+        await Promise.race(executing);
       }
     }
   }
+
+  return Promise.all(ret);
 }
 
 // -------------------- MAIN --------------------
 (async () => {
-  const keywords = await readCsv(SHEET_KEYWORDS);
-  const sites = await readCsv(SHEET_SITES);
-
-  const queries = keywords.flatMap(k => sites.map(s => `${k} ${s}`))
-    .slice(0, MAX_QUERIES);
+  const keywords = await readKeywords();
+  const sites = await readSites();
 
   console.log("KEYWORDS:", keywords.length);
   console.log("SITES:", sites.length);
+
+  const queries = buildSearchQueries(keywords, sites, 5);
   console.log("QUERIES:", queries.length);
 
-  const browser = await chromium.launch({
-    headless: true
-  });
-
-  const queue = new Queue(queries);
   const results = [];
 
-  const workers = [];
+  // параллельные поиски
+  await asyncPool(3, queries, async (q) => {
+    console.log("SEARCH:", q);
 
-  for (let i = 0; i < WORKERS; i++) {
-    workers.push(worker(i + 1, queue, browser, results));
-  }
+    const links = await searchLinks(q);
 
-  await Promise.all(workers);
+    await asyncPool(2, links, async (link) => {
+      const cleanUrl = cleanDuckUrl(link);
 
-  await browser.close();
+      if (!cleanUrl.includes("youtube.com/watch")) return;
 
-  console.log("\nFINAL RESULTS:", results.slice(0, 5));
+      const data = await parseYouTube(cleanUrl, q);
+      if (data) {
+        results.push(data);
+        console.log("YOUTUBE OK:", data.title);
+      }
+    });
+  });
+
+  console.log("FINAL:", results.slice(0, 3));
 })();

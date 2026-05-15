@@ -11,7 +11,11 @@ const WEBAPP_URL =
 
 const ALLOWED_SITES = [
   "rutube.ru",
-  "youtube.com"
+  "youtube.com",
+   "dzen.ru",
+  "vk.com",
+  "ok.ru",
+  "threads.net"
 ];
 
 // ==================== READ CSV ====================

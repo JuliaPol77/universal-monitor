@@ -1,64 +1,69 @@
 import { chromium } from "playwright";
 
-// -------------------- SHEETS --------------------
+// -------------------- CONFIG --------------------
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
 
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
-// -------------------- READ SHEETS --------------------
-async function readKeywords() {
-  const res = await fetch(SHEET_KEYWORDS);
-  const csv = await res.text();
+const MAX_QUERIES = 10;
+const WORKERS = 3;
+const TIMEOUT = 20000;
+const MAX_LINKS = 2;
 
-  return csv
-    .trim()
-    .split("\n")
-    .slice(1)
-    .map(l => l.split(",")[0].replace(/"/g, "").trim())
-    .filter(Boolean);
-}
+// -------------------- CACHE --------------------
+const cache = new Map();
 
-async function readSites() {
-  const res = await fetch(SHEET_SITES);
-  const csv = await res.text();
+// -------------------- UTIL --------------------
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  return csv
-    .trim()
-    .split("\n")
-    .slice(1)
-    .map(l => l.split(",")[0].replace(/"/g, "").trim())
-    .filter(Boolean);
-}
+async function safe(fn, retries = 2) {
+  let lastErr;
 
-// -------------------- BUILD QUERIES --------------------
-function buildSearchQueries(keywords, sites) {
-  const queries = [];
-
-  for (const k of keywords) {
-    for (const s of sites) {
-      queries.push(`${k} site:${s}`);
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      await sleep(500 * (i + 1)); // backoff
     }
   }
 
-  return queries;
+  console.log("FAILED after retries:", lastErr.message);
+  return null;
 }
 
-// -------------------- DUCKDUCKGO SEARCH --------------------
-async function searchLinks(query) {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+// -------------------- SHEETS --------------------
+async function readCsv(url) {
+  const res = await fetch(url);
+  const csv = await res.text();
 
+  return csv
+    .trim()
+    .split("\n")
+    .slice(1)
+    .map(l => l.split(",")[0]?.replace(/"/g, "").trim())
+    .filter(Boolean);
+}
+
+// -------------------- SEARCH --------------------
+async function searchLinks(query) {
+  if (cache.has(query)) return cache.get(query);
+
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const res = await fetch(url);
   const html = await res.text();
 
   const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
-    .map(m => m[1]);
+    .map(m => m[1])
+    .filter(Boolean);
 
-  return links.slice(0, 3);
+  cache.set(query, links);
+
+  return links;
 }
 
-// -------------------- CLEAN URL --------------------
 function cleanDuckUrl(url) {
   try {
     const match = url.match(/uddg=([^&]+)/);
@@ -68,79 +73,109 @@ function cleanDuckUrl(url) {
   }
 }
 
-// -------------------- YOUTUBE PARSER --------------------
-async function parseYouTube(page, url, query) {
-  console.log("YOUTUBE:", url);
+// -------------------- YOUTUBE --------------------
+async function parseYouTube(browser, url, query) {
+  const page = await browser.newPage();
 
-  await page.goto(url, {
-    waitUntil: "domcontentloaded",
-    timeout: 15000
-  });
+  try {
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: TIMEOUT,
+    });
 
-  await page.waitForTimeout(1500);
+    const title = await page.title();
 
-  const title = await page.title();
+    const description = await page.evaluate(() => {
+      const el = document.querySelector("#description");
+      return el ? el.innerText : "";
+    });
 
-  const description = await page.evaluate(() => {
-    const el = document.querySelector("#description");
-    return el ? el.innerText : "";
-  });
+    const comments = await page.evaluate(() => {
+      const nodes = document.querySelectorAll("#content-text");
+      return Array.from(nodes)
+        .slice(0, 10)
+        .map(e => e.innerText.trim())
+        .filter(Boolean);
+    });
 
-  const comments = await page.evaluate(() => {
-    const nodes = document.querySelectorAll("#content-text");
-    return Array.from(nodes)
-      .slice(0, 10)
-      .map(el => el.innerText.trim())
-      .filter(Boolean);
-  });
+    await page.close();
 
-  return {
-    url,
-    query,
-    title,
-    description,
-    comments
-  };
+    return { url, query, title, description, comments };
+
+  } catch (e) {
+    await page.close();
+    return null;
+  }
+}
+
+// -------------------- QUEUE --------------------
+class Queue {
+  constructor(items) {
+    this.items = items;
+    this.index = 0;
+  }
+
+  next() {
+    if (this.index >= this.items.length) return null;
+    return this.items[this.index++];
+  }
+}
+
+// -------------------- WORKER --------------------
+async function worker(id, queue, browser, results) {
+  while (true) {
+    const q = queue.next();
+    if (!q) return;
+
+    console.log(`Worker ${id} →`, q);
+
+    const links = await safe(() => searchLinks(q));
+    if (!links) continue;
+
+    const youtubeLinks = links
+      .map(cleanDuckUrl)
+      .filter(u => u.includes("youtube.com/watch"))
+      .slice(0, MAX_LINKS);
+
+    for (const link of youtubeLinks) {
+      const data = await safe(() => parseYouTube(browser, link, q));
+
+      if (data) {
+        results.push(data);
+        console.log(`Worker ${id} OK →`, data.title?.slice(0, 50));
+      }
+    }
+  }
 }
 
 // -------------------- MAIN --------------------
 (async () => {
-  const keywords = await readKeywords();
-  const sites = await readSites();
+  const keywords = await readCsv(SHEET_KEYWORDS);
+  const sites = await readCsv(SHEET_SITES);
+
+  const queries = keywords.flatMap(k => sites.map(s => `${k} ${s}`))
+    .slice(0, MAX_QUERIES);
 
   console.log("KEYWORDS:", keywords.length);
   console.log("SITES:", sites.length);
+  console.log("QUERIES:", queries.length);
 
-  // ⚡ ЖЁСТКИЙ ЛИМИТ (чтобы не зависало)
-  const queries = buildSearchQueries(keywords, sites).slice(0, 5);
+  const browser = await chromium.launch({
+    headless: true
+  });
 
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-
+  const queue = new Queue(queries);
   const results = [];
 
-  for (const q of queries) {
-    console.log("SEARCH:", q);
+  const workers = [];
 
-    const links = await searchLinks(q);
-
-    for (const link of links) {
-      const cleanUrl = cleanDuckUrl(link);
-
-      if (cleanUrl.includes("youtube.com/watch")) {
-        try {
-          const data = await parseYouTube(page, cleanUrl, q);
-          results.push(data);
-
-          console.log("COMMENTS:", data.comments.length);
-        } catch (e) {
-          console.log("SKIP VIDEO (error)");
-        }
-      }
-    }
+  for (let i = 0; i < WORKERS; i++) {
+    workers.push(worker(i + 1, queue, browser, results));
   }
+
+  await Promise.all(workers);
 
   await browser.close();
 
-  console.log("FINAL RESULTS SAMPLE:", results.slice(0, 3));
+  console.log("\nFINAL RESULTS:", results.slice(0, 5));
 })();

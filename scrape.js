@@ -1,4 +1,3 @@
-
 // ==================== CONFIG ====================
 
 const SHEET_KEYWORDS =
@@ -10,7 +9,7 @@ const SHEET_SITES =
 const WEBAPP_URL =
   "https://script.google.com/macros/s/AKfycbzmA9s0ZfO8pUjWmVKnC9qgtfhqBWtTPSpabdp5vQpsNtBHQ8LEmUzWbVJ99hWcwy-nng/exec";
 
-// ==================== CSV ====================
+// ==================== READ CSV ====================
 
 async function readCsv(url) {
   const res = await fetch(url);
@@ -32,19 +31,21 @@ async function readSites() {
   return readCsv(SHEET_SITES);
 }
 
-// ==================== SEARCH ====================
+// ==================== BUILD QUERIES ====================
 
 function buildQueries(keywords, sites) {
-  const arr = [];
+  const queries = [];
 
   for (const keyword of keywords) {
     for (const site of sites) {
-      arr.push(`${keyword} ${site}`);
+      queries.push(`${keyword} ${site}`);
     }
   }
 
-  return arr;
+  return queries;
 }
+
+// ==================== SEARCH ====================
 
 async function searchDuck(query) {
   try {
@@ -66,9 +67,9 @@ async function searchDuck(query) {
       .map((m) => m[1])
       .map(cleanDuckUrl)
       .filter((u) => u.includes("youtube.com/watch"))
-      .slice(0, 3);
+      .slice(0, 5);
   } catch (e) {
-    console.log("SEARCH ERROR", e.message);
+    console.log("SEARCH ERROR:", e.message);
     return [];
   }
 }
@@ -85,41 +86,11 @@ function cleanDuckUrl(url) {
   }
 }
 
-// ==================== COMMENTS ====================
-
-async function getComments(videoUrl) {
-  try {
-    const html = await fetch(videoUrl).then((r) => r.text());
-
-    const comments = [];
-
-    const regex =
-      /"contentText":\{"runs":\[\{"text":"(.*?)"\}\]/g;
-
-    const matches = [...html.matchAll(regex)];
-
-    for (const m of matches) {
-      const text = m[1];
-
-      if (!text) continue;
-
-      if (text.length < 3) continue;
-
-      comments.push(text);
-    }
-
-    return comments.slice(0, 20);
-  } catch (e) {
-    console.log("COMMENT ERROR", e.message);
-    return [];
-  }
-}
-
-// ==================== WRITE ====================
+// ==================== WRITE TO GOOGLE SHEET ====================
 
 async function writeResult(row) {
   try {
-    await fetch(WEBAPP_URL, {
+    const res = await fetch(WEBAPP_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -127,9 +98,11 @@ async function writeResult(row) {
       body: JSON.stringify(row),
     });
 
-    console.log("WRITTEN");
+    const text = await res.text();
+
+    console.log("WRITE RESPONSE:", text);
   } catch (e) {
-    console.log("WRITE ERROR", e.message);
+    console.log("WRITE ERROR:", e.message);
   }
 }
 
@@ -141,8 +114,8 @@ async function writeResult(row) {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  console.log("KEYWORDS:", keywords.length);
-  console.log("SITES:", sites.length);
+  console.log("KEYWORDS:", keywords);
+  console.log("SITES:", sites);
 
   const queries = buildQueries(keywords, sites);
 
@@ -153,27 +126,19 @@ async function writeResult(row) {
 
     const links = await searchDuck(query);
 
-    console.log("FOUND LINKS:", links.length);
+    console.log("FOUND:", links.length);
 
     for (const url of links) {
       console.log("VIDEO:", url);
 
-      const comments = await getComments(url);
-
-      console.log("COMMENTS:", comments.length);
-
-      for (const comment of comments) {
-        const row = {
-          keyword: query,
-          site: "youtube",
-          postUrl: url,
-          commentUrl: url,
-          comment: comment,
-          date: new Date().toISOString(),
-        };
-
-        await writeResult(row);
-      }
+      await writeResult({
+        keyword: query,
+        site: "youtube",
+        postUrl: url,
+        commentUrl: "",
+        comment: "",
+        date: new Date().toISOString(),
+      });
     }
   }
 

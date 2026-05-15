@@ -7,67 +7,55 @@ const SHEET_KEYWORDS =
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
-// -------------------- LIMITS (важно для стабильности) --------------------
-const MAX_QUERIES = 5;
-const MAX_LINKS = 1;
-const MAX_COMMENTS = 10;
-const TIMEOUT = 12000;
-
-// -------------------- READ KEYWORDS --------------------
+// -------------------- READ SHEETS --------------------
 async function readKeywords() {
   const res = await fetch(SHEET_KEYWORDS);
   const csv = await res.text();
 
-  const lines = csv.trim().split("\n");
-  lines.shift();
-
-  return lines
+  return csv
+    .trim()
+    .split("\n")
+    .slice(1)
     .map(l => l.split(",")[0].replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
-// -------------------- READ SITES --------------------
 async function readSites() {
   const res = await fetch(SHEET_SITES);
   const csv = await res.text();
 
-  const lines = csv.trim().split("\n");
-  lines.shift();
-
-  return lines
+  return csv
+    .trim()
+    .split("\n")
+    .slice(1)
     .map(l => l.split(",")[0].replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
 // -------------------- BUILD QUERIES --------------------
 function buildSearchQueries(keywords, sites) {
-  const out = [];
+  const queries = [];
 
   for (const k of keywords) {
     for (const s of sites) {
-      out.push(`${k} site:${s}`);
+      queries.push(`${k} site:${s}`);
     }
   }
 
-  return out;
+  return queries;
 }
 
-// -------------------- SEARCH (DuckDuckGo HTML) --------------------
+// -------------------- DUCKDUCKGO SEARCH --------------------
 async function searchLinks(query) {
-  try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
-    const res = await fetch(url, { timeout: 10000 });
-    const html = await res.text();
+  const res = await fetch(url);
+  const html = await res.text();
 
-    const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
-      .map(m => m[1])
-      .filter(Boolean);
+  const links = [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
+    .map(m => m[1]);
 
-    return links;
-  } catch {
-    return [];
-  }
+  return links.slice(0, 3);
 }
 
 // -------------------- CLEAN URL --------------------
@@ -84,41 +72,35 @@ function cleanDuckUrl(url) {
 async function parseYouTube(page, url, query) {
   console.log("YOUTUBE:", url);
 
-  try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: TIMEOUT
-    });
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: 15000
+  });
 
-    await page.waitForTimeout(2000);
+  await page.waitForTimeout(1500);
 
-    const title = await page.title().catch(() => "");
+  const title = await page.title();
 
-    const description = await page.evaluate(() => {
-      const el = document.querySelector("#description");
-      return el ? el.innerText : "";
-    }).catch(() => "");
+  const description = await page.evaluate(() => {
+    const el = document.querySelector("#description");
+    return el ? el.innerText : "";
+  });
 
-    const comments = await page.evaluate((max) => {
-      const nodes = document.querySelectorAll("#content-text");
-      return Array.from(nodes)
-        .slice(0, max)
-        .map(el => el.innerText.trim())
-        .filter(Boolean);
-    }, MAX_COMMENTS).catch(() => []);
+  const comments = await page.evaluate(() => {
+    const nodes = document.querySelectorAll("#content-text");
+    return Array.from(nodes)
+      .slice(0, 10)
+      .map(el => el.innerText.trim())
+      .filter(Boolean);
+  });
 
-    return {
-      url,
-      query,
-      title,
-      description,
-      comments
-    };
-
-  } catch (e) {
-    console.log("YOUTUBE ERROR:", e.message);
-    return null;
-  }
+  return {
+    url,
+    query,
+    title,
+    description,
+    comments
+  };
 }
 
 // -------------------- MAIN --------------------
@@ -126,19 +108,14 @@ async function parseYouTube(page, url, query) {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  const queries = buildSearchQueries(keywords, sites).slice(0, MAX_QUERIES);
-
   console.log("KEYWORDS:", keywords.length);
   console.log("SITES:", sites.length);
-  console.log("QUERIES:", queries.length);
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox"]
-  });
+  // ⚡ ЖЁСТКИЙ ЛИМИТ (чтобы не зависало)
+  const queries = buildSearchQueries(keywords, sites).slice(0, 5);
 
+  const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  page.setDefaultTimeout(TIMEOUT);
 
   const results = [];
 
@@ -147,15 +124,17 @@ async function parseYouTube(page, url, query) {
 
     const links = await searchLinks(q);
 
-    for (const link of links.slice(0, MAX_LINKS)) {
+    for (const link of links) {
       const cleanUrl = cleanDuckUrl(link);
 
       if (cleanUrl.includes("youtube.com/watch")) {
-        const data = await parseYouTube(page, cleanUrl, q);
-
-        if (data) {
+        try {
+          const data = await parseYouTube(page, cleanUrl, q);
           results.push(data);
+
           console.log("COMMENTS:", data.comments.length);
+        } catch (e) {
+          console.log("SKIP VIDEO (error)");
         }
       }
     }
@@ -163,5 +142,5 @@ async function parseYouTube(page, url, query) {
 
   await browser.close();
 
-  console.log("FINAL SAMPLE:", results.slice(0, 3));
+  console.log("FINAL RESULTS SAMPLE:", results.slice(0, 3));
 })();

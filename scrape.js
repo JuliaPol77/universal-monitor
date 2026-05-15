@@ -72,33 +72,74 @@ function cleanDuckUrl(url) {
 }
 
 
+// -------------------- YOUTUBE --------------------
+async function parseYouTube(page, url, query) {
+  console.log("YOUTUBE PARSE:", url);
+
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(4000);
+
+  // описание видео
+  const title = await page.title();
+
+  const description = await page.evaluate(() => {
+    const el = document.querySelector("#description");
+    return el ? el.innerText : "";
+  });
+
+  // комментарии (первые загруженные)
+  const comments = await page.evaluate(() => {
+    const nodes = document.querySelectorAll("#content-text");
+    return Array.from(nodes)
+      .slice(0, 20)
+      .map(el => el.innerText.trim())
+      .filter(Boolean);
+  });
+
+  return {
+    url,
+    query,
+    title,
+    description,
+    comments
+  };
+}
+
 // -------------------- MAIN --------------------
 (async () => {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  const queries = buildSearchQueries(keywords, sites).slice(0, 50);
+  const queries = buildSearchQueries(keywords, sites).slice(0, 20);
 
-  console.log("TOTAL QUERIES:", queries.length);
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
 
-  const allResults = [];
+  const results = [];
 
   for (const q of queries) {
     console.log("SEARCH:", q);
 
-    try {
-      const links = await searchLinks(q);
+    const links = await searchLinks(q);
 
-      for (const link of links.slice(0, 3)) {
-        allResults.push({
-          query: q,
-          url: cleanDuckUrl(link)
-        });
+    for (const link of links.slice(0, 2)) {
+      const cleanUrl = cleanDuckUrl(link);
+
+      // пока делаем только YouTube
+      if (cleanUrl.includes("youtube.com/watch")) {
+        const data = await parseYouTube(page, cleanUrl, q);
+
+        results.push(data);
+
+        console.log("COMMENTS:", data.comments.length);
       }
-    } catch (e) {
-      console.log("ERROR:", q);
     }
   }
+
+  await browser.close();
+
+  console.log("FINAL RESULTS SAMPLE:", results.slice(0, 2));
+})();
 
   console.log("RESULTS:", allResults.slice(0, 10));
 })();

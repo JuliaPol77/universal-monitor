@@ -9,6 +9,28 @@ const SHEET_SITES =
 const WEBAPP_URL =
   "https://script.google.com/macros/s/AKfycbzgv33XufOlfIQ4uRcW2cZfryqwjnfODx-k14erXh32Kqo7UFofTY4tz1pC9qBkuVc1hQ/exec";
 
+const ALLOWED_SITES = [
+  "rutube.ru",
+  "dzen.ru",
+  "vk.com",
+  "ok.ru",
+  "threads.net",
+  "woman.ru",
+  "babyblog.ru",
+  "eva.ru",
+  "otvet.mail.ru",
+  "7ya.ru",
+  "cosmo.ru",
+  "lisa.ru",
+  "womanhit.ru",
+  "passion.ru",
+  "mycharm.ru",
+  "livejournal.com",
+  "pikabu.ru",
+  "vc.ru",
+  "youtube.com"
+];
+
 // ==================== CSV ====================
 
 async function readCsv(url) {
@@ -19,7 +41,7 @@ async function readCsv(url) {
     .trim()
     .split("\n")
     .slice(1)
-    .map((line) => line.split(",")[0]?.replace(/"/g, "").trim())
+    .map(l => l.split(",")[0]?.replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
@@ -32,34 +54,26 @@ function buildQueries(keywords, sites) {
   const out = [];
   for (const k of keywords) {
     for (const s of sites) {
-      out.push(`${k} ${s}`);
+      out.push(`${k} site:${s}`);
     }
   }
   return out;
 }
 
-// ==================== DUCK SEARCH ====================
+// ==================== SEARCH ====================
 
 async function searchDuck(query) {
-  try {
-    const res = await fetch(
-      "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query)
-    );
+  const url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query);
 
-    const html = await res.text();
+  const res = await fetch(url);
+  const html = await res.text();
 
-    const matches = [
-      ...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g),
-    ];
-
-    return matches
-      .map((m) => m[1])
-      .map(cleanDuckUrl)
-      .filter((u) => u.includes("youtube.com/watch"))
-      .slice(0, 5);
-  } catch {
-    return [];
-  }
+  return [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
+    .map(m => m[1])
+    .map(cleanDuckUrl)
+    .filter(Boolean)
+    .filter(u => ALLOWED_SITES.some(s => u.includes(s)))
+    .slice(0, 5);
 }
 
 function cleanDuckUrl(url) {
@@ -71,69 +85,13 @@ function cleanDuckUrl(url) {
   }
 }
 
-// ==================== YOUTUBE COMMENTS (NO API KEY) ====================
-
-function getVideoId(url) {
-  return url.split("v=")[1]?.split("&")[0];
-}
-
-async function getComments(videoId) {
-  try {
-    const res = await fetch(
-      "https://www.youtube.com/youtubei/v1/next?key=AIzaSyDUMMY",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          context: {
-            client: {
-              clientName: "WEB",
-              clientVersion: "2.2024",
-            },
-          },
-          videoId,
-        }),
-      }
-    );
-
-    const data = await res.json();
-
-    const sections =
-      data?.contents?.twoColumnWatchNextResults?.results?.results?.contents ||
-      [];
-
-    const out = [];
-
-    for (const s of sections) {
-      const runs =
-        s?.commentThreadRenderer?.comment?.commentRenderer?.contentText?.runs;
-
-      const text = runs?.map((r) => r.text).join("");
-
-      if (text) {
-        out.push({
-          text,
-        });
-      }
-    }
-
-    return out;
-  } catch {
-    return [];
-  }
-}
-
 // ==================== WRITE ====================
 
 async function writeResult(row) {
   await fetch(WEBAPP_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(row),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(row)
   });
 }
 
@@ -145,27 +103,18 @@ async function writeResult(row) {
 
   const queries = buildQueries(keywords, sites);
 
-  for (const query of queries) {
-    const links = await searchDuck(query);
+  for (const q of queries) {
+    const links = await searchDuck(q);
 
     for (const url of links) {
-      const videoId = getVideoId(url);
-      if (!videoId) continue;
-
-      const comments = await getComments(videoId);
-
-      for (const c of comments) {
-        await writeResult({
-          keyword: query,
-          site: "youtube",
-          postUrl: url,
-          commentUrl: `https://www.youtube.com/watch?v=${videoId}`,
-          comment: c.text,
-          date: new Date().toISOString(),
-        });
-      }
+      await writeResult({
+        keyword: q,
+        site: "search",
+        postUrl: url,
+        commentUrl: "",
+        comment: "",
+        date: new Date().toISOString()
+      });
     }
   }
-
-  console.log("DONE");
 })();

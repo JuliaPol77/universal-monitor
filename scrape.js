@@ -1,11 +1,14 @@
-// -------------------- SHEETS --------------------
+// ===================== SHEETS =====================
 const SHEET_KEYWORDS =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=ключи";
 
 const SHEET_SITES =
   "https://docs.google.com/spreadsheets/d/1GCInDCLc4h7xGekTAfAPeeY1vt0Gcv464dSLJi5MiAA/gviz/tq?tqx=out:csv&sheet=площадки";
 
-// -------------------- READERS --------------------
+// сюда вставь WebApp Google Apps Script (doPost)
+const SHEET_WEBAPP_URL = "PASTE_WEBAPP_URL_HERE";
+
+// ===================== UTILS =====================
 async function readCsv(url) {
   const res = await fetch(url);
   const csv = await res.text();
@@ -21,8 +24,7 @@ async function readCsv(url) {
 const readKeywords = () => readCsv(SHEET_KEYWORDS);
 const readSites = () => readCsv(SHEET_SITES);
 
-// -------------------- QUERIES --------------------
-function buildSearchQueries(keywords, sites, limit = 5) {
+function buildSearchQueries(keywords, sites, limit = 10) {
   const out = [];
   for (const k of keywords) {
     for (const s of sites) {
@@ -33,19 +35,18 @@ function buildSearchQueries(keywords, sites, limit = 5) {
   return out;
 }
 
-// -------------------- DUCKDUCKGO --------------------
+// ===================== DUCK SEARCH =====================
 async function searchLinks(query) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
   const res = await fetch(url);
   const html = await res.text();
 
   return [...html.matchAll(/<a rel="nofollow" class="result__a" href="(.*?)"/g)]
     .map(m => m[1])
-    .slice(0, 3);
+    .slice(0, 5);
 }
 
-function cleanDuckUrl(url) {
+function cleanUrl(url) {
   try {
     const match = url.match(/uddg=([^&]+)/);
     return match ? decodeURIComponent(match[1]) : url;
@@ -54,32 +55,109 @@ function cleanDuckUrl(url) {
   }
 }
 
-// -------------------- FAST YOUTUBE (NO PLAYWRIGHT) --------------------
-async function parseYouTube(url, query) {
+// ===================== YOUTUBE VIDEO ID =====================
+function getVideoId(url) {
   try {
-    const videoId = url.split("v=")[1]?.split("&")[0];
-
-    if (!videoId) return null;
-
-    // лёгкий metadata fetch (очень быстрый)
-    const oembed = await fetch(
-      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-    ).then(r => r.json()).catch(() => null);
-
-    return {
-      url,
-      query,
-      title: oembed?.title || "",
-      author: oembed?.author_name || "",
-      comments: [] // ⚠️ fast mode: без тяжёлого DOM
-    };
-
+    if (url.includes("v=")) return url.split("v=")[1].split("&")[0];
+    if (url.includes("youtu.be/")) return url.split("youtu.be/")[1].split("?")[0];
+    return null;
   } catch {
     return null;
   }
 }
 
-// -------------------- PARALLEL LIMIT --------------------
+// ===================== DATE FILTER =====================
+function isTodayOrYesterday(dateText) {
+  if (!dateText) return false;
+  const txt = dateText.toLowerCase();
+  return txt.includes("ago") ||
+    txt.includes("hour") ||
+    txt.includes("minute") ||
+    txt.includes("yesterday") ||
+    txt.includes("today");
+}
+
+// ===================== PARSE COMMENTS (NO API) =====================
+async function parseYouTubeComments(videoUrl, keyword, site) {
+  const videoId = getVideoId(videoUrl);
+  if (!videoId) return [];
+
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const html = await fetch(url).then(r => r.text()).catch(() => null);
+  if (!html) return [];
+
+  const jsonMatch = html.match(/ytInitialData\s*=\s*(\{.+?\});/s);
+  if (!jsonMatch) return [];
+
+  let data;
+  try {
+    data = JSON.parse(jsonMatch[1]);
+  } catch {
+    return [];
+  }
+
+  const comments =
+    data?.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
+
+  const results = [];
+
+  function walk(obj) {
+    if (!obj || typeof obj !== "object") return;
+
+    if (obj.commentRenderer) {
+      const c = obj.commentRenderer;
+
+      const text =
+        c?.contentText?.runs?.map(r => r.text).join("") || "";
+
+      const date =
+        c?.publishedTimeText?.runs?.[0]?.text || "";
+
+      const author =
+        c?.authorText?.simpleText || "";
+
+      const commentUrl =
+        `https://www.youtube.com/watch?v=${videoId}`;
+
+      if (
+        text &&
+        text.toLowerCase().includes(keyword.toLowerCase())
+      ) {
+        if (isTodayOrYesterday(date)) {
+          results.push({
+            keyword,
+            site,
+            videoUrl,
+            commentUrl,
+            text,
+            date
+          });
+        }
+      }
+    }
+
+    for (const k in obj) {
+      walk(obj[k]);
+    }
+  }
+
+  walk(comments);
+
+  return results.slice(0, 20);
+}
+
+// ===================== SEND TO SHEET =====================
+async function sendToSheet(rows) {
+  if (!rows.length) return;
+
+  await fetch(SHEET_WEBAPP_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows })
+  });
+}
+
+// ===================== POOL =====================
 async function asyncPool(limit, items, fn) {
   const ret = [];
   const executing = [];
@@ -100,37 +178,35 @@ async function asyncPool(limit, items, fn) {
   return Promise.all(ret);
 }
 
-// -------------------- MAIN --------------------
+// ===================== MAIN =====================
 (async () => {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  console.log("KEYWORDS:", keywords.length);
-  console.log("SITES:", sites.length);
+  const queries = buildSearchQueries(keywords, sites, 10);
 
-  const queries = buildSearchQueries(keywords, sites, 5);
-  console.log("QUERIES:", queries.length);
+  const allResults = [];
 
-  const results = [];
-
-  // параллельные поиски
   await asyncPool(3, queries, async (q) => {
-    console.log("SEARCH:", q);
-
     const links = await searchLinks(q);
 
-    await asyncPool(2, links, async (link) => {
-      const cleanUrl = cleanDuckUrl(link);
+    await asyncPool(2, links, async (l) => {
+      const url = cleanUrl(l);
+      if (!url.includes("youtube.com/watch") && !url.includes("youtu.be")) return;
 
-      if (!cleanUrl.includes("youtube.com/watch")) return;
+      const videoId = getVideoId(url);
+      if (!videoId) return;
 
-      const data = await parseYouTube(cleanUrl, q);
-      if (data) {
-        results.push(data);
-        console.log("YOUTUBE OK:", data.title);
+      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+      for (const k of keywords) {
+        const rows = await parseYouTubeComments(videoUrl, k, q);
+        allResults.push(...rows);
       }
     });
   });
 
-  console.log("FINAL:", results.slice(0, 3));
+  await sendToSheet(allResults);
+
+  console.log("DONE:", allResults.length);
 })();

@@ -41,7 +41,7 @@ async function readCsv(url) {
     .trim()
     .split("\n")
     .slice(1)
-    .map((line) => line.split(",")[0]?.replace(/"/g, "").trim())
+    .map(line => line.split(",")[0]?.replace(/"/g, "").trim())
     .filter(Boolean);
 }
 
@@ -97,7 +97,7 @@ async function searchDuck(query) {
   }
 }
 
-// ==================== CLEAN URL ====================
+// ==================== CLEAN DUCK URL ====================
 
 function cleanDuckUrl(url) {
   try {
@@ -109,7 +109,7 @@ function cleanDuckUrl(url) {
   }
 }
 
-// ==================== FILTER SITES ====================
+// ==================== FILTER ====================
 
 function isAllowed(url) {
   try {
@@ -123,9 +123,9 @@ function isAllowed(url) {
   }
 }
 
-// ==================== PARSE TITLE + DATE ====================
+// ==================== PARSE TITLE ====================
 
-async function parsePageMeta(url) {
+async function parsePageTitle(url) {
   try {
     const res = await fetch(url, {
       headers: {
@@ -135,38 +135,19 @@ async function parsePageMeta(url) {
 
     const html = await res.text();
 
-    // TITLE
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    const title = titleMatch ? titleMatch[1].trim() : "";
+    let title =
+      html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1] || "";
 
-    // DATE (разные источники)
-    let date = "";
+    title = title
+      .replace(/\s+/g, " ")
+      .replace(/\n/g, " ")
+      .trim();
 
-    const og =
-      html.match(/property="article:published_time"\s*content="(.*?)"/i);
-
-    const jsonLd =
-      html.match(/"datePublished"\s*:\s*"([^"]+)"/i);
-
-    const timeTag =
-      html.match(/<time[^>]*datetime="([^"]+)"/i);
-
-    if (og) date = og[1];
-    else if (jsonLd) date = jsonLd[1];
-    else if (timeTag) date = timeTag[1];
-
-    return {
-      title,
-      date
-    };
+    return title;
 
   } catch (e) {
-    console.log("PARSE ERROR:", url, e.message);
-
-    return {
-      title: "",
-      date: ""
-    };
+    console.log("TITLE ERROR:", e.message);
+    return "";
   }
 }
 
@@ -174,7 +155,6 @@ async function parsePageMeta(url) {
 
 async function writeResult(row) {
   try {
-
     console.log("SENDING:", row);
 
     const res = await fetch(WEBAPP_URL, {
@@ -228,15 +208,18 @@ function getSiteName(url) {
 
     for (const url of links) {
 
-      const meta = await parsePageMeta(url);
+      const title = await parsePageTitle(url);
+
+      console.log("TITLE:", title);
 
       await writeResult({
         keyword: query,
         site: getSiteName(url),
         postUrl: url,
-        title: meta.title,
-        publishDate: meta.date,
-        collectedAt: new Date().toISOString()
+        title: title,
+        commentUrl: "",
+        comment: "",
+        date: new Date().toISOString()
       });
 
     }

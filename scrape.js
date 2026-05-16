@@ -68,7 +68,7 @@ function buildQueries(keywords, sites) {
   return queries;
 }
 
-// ==================== SEARCH (ONLY DDG SERP) ====================
+// ==================== SEARCH ====================
 
 async function searchDuck(query) {
   try {
@@ -79,14 +79,16 @@ async function searchDuck(query) {
     const res = await fetch(url);
     const html = await res.text();
 
-    const results = [...html.matchAll(
-      /<a rel="nofollow" class="result__a" href="(.*?)">(.*?)<\/a>/g
-    )];
+    const matches = [
+      ...html.matchAll(
+        /<a rel="nofollow" class="result__a" href="(.*?)">(.*?)<\/a>/g
+      ),
+    ];
 
-    return results
-      .map(r => {
-        const url = cleanDuckUrl(r[1]);
-        const title = cleanTitle(r[2]);
+    return matches
+      .map(m => {
+        const url = cleanDuckUrl(m[1]);
+        const title = cleanText(m[2]);
 
         return { url, title };
       })
@@ -113,14 +115,14 @@ function cleanDuckUrl(url) {
 
 // ==================== CLEAN TITLE ====================
 
-function cleanTitle(title) {
-  return title
-    .replace(/<[^>]+>/g, "")
+function cleanText(text) {
+  return text
+    .replace(/<[^>]*>/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// ==================== FILTER ====================
+// ==================== FILTER SITES ====================
 
 function isAllowed(url) {
   try {
@@ -134,11 +136,20 @@ function isAllowed(url) {
   }
 }
 
-// ==================== WRITE ====================
+// ==================== GET SITE ====================
+
+function getSiteName(url) {
+  try {
+    return new URL(url).hostname.replace("www.", "");
+  } catch {
+    return "unknown";
+  }
+}
+
+// ==================== WRITE TO SHEET ====================
 
 async function writeResult(row) {
   try {
-
     console.log("SENDING:", row);
 
     const res = await fetch(WEBAPP_URL, {
@@ -150,23 +161,10 @@ async function writeResult(row) {
     });
 
     console.log("STATUS:", res.status);
-
-    const text = await res.text();
-
-    console.log("RESPONSE:", text);
+    console.log("RESPONSE:", await res.text());
 
   } catch (e) {
     console.log("WRITE ERROR:", e.message);
-  }
-}
-
-// ==================== SITE NAME ====================
-
-function getSiteName(url) {
-  try {
-    return new URL(url).hostname.replace("www.", "");
-  } catch {
-    return "unknown";
   }
 }
 
@@ -183,7 +181,6 @@ function getSiteName(url) {
   console.log("QUERIES:", queries.length);
 
   for (const query of queries) {
-
     console.log("SEARCH:", query);
 
     const results = await searchDuck(query);
@@ -191,15 +188,17 @@ function getSiteName(url) {
     console.log("FOUND:", results.length);
 
     for (const item of results) {
+      console.log("RESULT:", item.url);
 
       await writeResult({
         keyword: query,
         site: getSiteName(item.url),
         postUrl: item.url,
         title: item.title,
-        date: new Date().toISOString()
+        commentUrl: "",
+        comment: "",
+        date: new Date().toISOString(),
       });
-
     }
   }
 

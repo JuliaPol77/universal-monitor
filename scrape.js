@@ -68,7 +68,7 @@ function buildQueries(keywords, sites) {
   return queries;
 }
 
-// ==================== SEARCH ====================
+// ==================== SEARCH (ONLY DDG SERP) ====================
 
 async function searchDuck(query) {
   try {
@@ -79,16 +79,18 @@ async function searchDuck(query) {
     const res = await fetch(url);
     const html = await res.text();
 
-    const matches = [
-      ...html.matchAll(
-        /<a rel="nofollow" class="result__a" href="(.*?)"/g
-      ),
-    ];
+    const results = [...html.matchAll(
+      /<a rel="nofollow" class="result__a" href="(.*?)">(.*?)<\/a>/g
+    )];
 
-    return matches
-      .map(m => cleanDuckUrl(m[1]))
-      .filter(Boolean)
-      .filter(isAllowed)
+    return results
+      .map(r => {
+        const url = cleanDuckUrl(r[1]);
+        const title = cleanTitle(r[2]);
+
+        return { url, title };
+      })
+      .filter(r => isAllowed(r.url))
       .slice(0, 10);
 
   } catch (e) {
@@ -97,7 +99,7 @@ async function searchDuck(query) {
   }
 }
 
-// ==================== CLEAN DUCK URL ====================
+// ==================== CLEAN URL ====================
 
 function cleanDuckUrl(url) {
   try {
@@ -107,6 +109,15 @@ function cleanDuckUrl(url) {
   } catch {
     return url;
   }
+}
+
+// ==================== CLEAN TITLE ====================
+
+function cleanTitle(title) {
+  return title
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // ==================== FILTER ====================
@@ -123,38 +134,11 @@ function isAllowed(url) {
   }
 }
 
-// ==================== PARSE TITLE ====================
-
-async function parsePageTitle(url) {
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-
-    const html = await res.text();
-
-    let title =
-      html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1] || "";
-
-    title = title
-      .replace(/\s+/g, " ")
-      .replace(/\n/g, " ")
-      .trim();
-
-    return title;
-
-  } catch (e) {
-    console.log("TITLE ERROR:", e.message);
-    return "";
-  }
-}
-
-// ==================== WRITE TO SHEET ====================
+// ==================== WRITE ====================
 
 async function writeResult(row) {
   try {
+
     console.log("SENDING:", row);
 
     const res = await fetch(WEBAPP_URL, {
@@ -202,23 +186,17 @@ function getSiteName(url) {
 
     console.log("SEARCH:", query);
 
-    const links = await searchDuck(query);
+    const results = await searchDuck(query);
 
-    console.log("FOUND:", links.length);
+    console.log("FOUND:", results.length);
 
-    for (const url of links) {
-
-      const title = await parsePageTitle(url);
-
-      console.log("TITLE:", title);
+    for (const item of results) {
 
       await writeResult({
         keyword: query,
-        site: getSiteName(url),
-        postUrl: url,
-        title: title,
-        commentUrl: "",
-        comment: "",
+        site: getSiteName(item.url),
+        postUrl: item.url,
+        title: item.title,
         date: new Date().toISOString()
       });
 

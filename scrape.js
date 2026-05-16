@@ -60,11 +60,7 @@ function buildQueries(keywords, sites) {
 
   for (const keyword of keywords) {
     for (const site of sites) {
-
-      const cleanSite = site
-        .replace("site:", "")
-        .trim();
-
+      const cleanSite = site.replace("site:", "").trim();
       queries.push(`${keyword} ${cleanSite}`);
     }
   }
@@ -89,13 +85,11 @@ async function searchDuck(query) {
       ),
     ];
 
-    const urls = matches
+    return matches
       .map(m => cleanDuckUrl(m[1]))
       .filter(Boolean)
       .filter(isAllowed)
       .slice(0, 10);
-
-    return urls;
 
   } catch (e) {
     console.log("SEARCH ERROR:", e.message);
@@ -103,7 +97,7 @@ async function searchDuck(query) {
   }
 }
 
-// ==================== CLEAN DUCK URL ====================
+// ==================== CLEAN URL ====================
 
 function cleanDuckUrl(url) {
   try {
@@ -115,7 +109,7 @@ function cleanDuckUrl(url) {
   }
 }
 
-// ==================== NORMALIZE + FILTER ====================
+// ==================== FILTER SITES ====================
 
 function isAllowed(url) {
   try {
@@ -129,48 +123,59 @@ function isAllowed(url) {
   }
 }
 
+// ==================== PARSE TITLE + DATE ====================
 
-// ==================== PARSE PAGE TEXT ====================
-
-async function parsePageText(url) {
+async function parsePageMeta(url) {
   try {
-
     const res = await fetch(url, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      },
+        "User-Agent": "Mozilla/5.0"
+      }
     });
 
     const html = await res.text();
 
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 5000);
+    // TITLE
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim() : "";
 
-    return text;
+    // DATE (разные источники)
+    let date = "";
+
+    const og =
+      html.match(/property="article:published_time"\s*content="(.*?)"/i);
+
+    const jsonLd =
+      html.match(/"datePublished"\s*:\s*"([^"]+)"/i);
+
+    const timeTag =
+      html.match(/<time[^>]*datetime="([^"]+)"/i);
+
+    if (og) date = og[1];
+    else if (jsonLd) date = jsonLd[1];
+    else if (timeTag) date = timeTag[1];
+
+    return {
+      title,
+      date
+    };
 
   } catch (e) {
+    console.log("PARSE ERROR:", url, e.message);
 
-    console.log("PARSE ERROR:", e.message);
-
-    return "";
-
+    return {
+      title: "",
+      date: ""
+    };
   }
 }
 
-
-// ==================== WRITE TO GOOGLE SHEET ====================
+// ==================== WRITE TO SHEET ====================
 
 async function writeResult(row) {
   try {
 
-    console.log("SENDING:");
-    console.log(row);
+    console.log("SENDING:", row);
 
     const res = await fetch(WEBAPP_URL, {
       method: "POST",
@@ -187,14 +192,11 @@ async function writeResult(row) {
     console.log("RESPONSE:", text);
 
   } catch (e) {
-
-    console.log("WRITE ERROR:");
-    console.log(e);
-
+    console.log("WRITE ERROR:", e.message);
   }
 }
 
-// ==================== GET SITE NAME ====================
+// ==================== SITE NAME ====================
 
 function getSiteName(url) {
   try {
@@ -212,14 +214,12 @@ function getSiteName(url) {
   const keywords = await readKeywords();
   const sites = await readSites();
 
-  console.log("KEYWORDS:", keywords);
-  console.log("SITES:", sites);
-
   const queries = buildQueries(keywords, sites);
 
   console.log("QUERIES:", queries.length);
 
   for (const query of queries) {
+
     console.log("SEARCH:", query);
 
     const links = await searchDuck(query);
@@ -227,18 +227,18 @@ function getSiteName(url) {
     console.log("FOUND:", links.length);
 
     for (const url of links) {
-      console.log("VIDEO:", url);
 
-const text = await parsePageText(url);
+      const meta = await parsePageMeta(url);
 
-await writeResult({
-  keyword: query,
-  site: getSiteName(url),
-  postUrl: url,
-  commentUrl: "",
-  comment: text,
-  date: new Date().toISOString(),
-});
+      await writeResult({
+        keyword: query,
+        site: getSiteName(url),
+        postUrl: url,
+        title: meta.title,
+        publishDate: meta.date,
+        collectedAt: new Date().toISOString()
+      });
+
     }
   }
 
